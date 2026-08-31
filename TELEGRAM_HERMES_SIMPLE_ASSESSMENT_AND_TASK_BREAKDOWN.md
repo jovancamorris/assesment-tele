@@ -50,8 +50,8 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <-->|Auth & Whitelist| WebBE
-    TeleMW -->|Forward Chat & Session Scope| HMW
+    TeleMW <-->|1. Auth & Return User Key| WebBE
+    TeleMW -->|2. Transaksi Chat + User Key| HMW
     WebBE <-->|Trusted Context & Runs| HMW
     HGW <--> HermesCore
     HermesCore <--> MinIO
@@ -60,16 +60,18 @@ flowchart TD
 
 ### 🧩 Deskripsi Komponen & Peran:
 
-1. **Telegram Layer (`Tele Bot App` & `Middleware`)**:
+1. **Telegram Layer (`Tele Bot App` & `Telegram Middleware`)**:
    - **`Tele Bot App`**: Menangani interaksi pengguna di Telegram (command `/start`, `/newchat`, `/projects`, inline buttons, dan tombol native *Share Contact*).
-   - **`Middleware`**: Menjembatani bot dengan backend, memvalidasi otentikasi user, serta mem-forward request chat ke `factory-agent-adapter` dengan membawa metadata sesi yang aman.
+   - **`Telegram Middleware`**: 
+     - Melakukan proses autentikasi awal ke **`factory-portal-service` (Backend)** untuk validasi whitelist user dan mendapatkan **User Key** (kunci user / session token).
+     - **Hanya setelah User Key berhasil didapatkan**, Telegram Middleware diizinkan melakukan transaksi chat/eksekusi prompt ke **`factory-agent-adapter` (Middleware Hermes)** dengan menyertakan User Key dan *session scope* yang valid.
 
 2. **Web Portal (`factory-portal-web` [FE] & `factory-portal-service` [BE])**:
    - **`Frontend (factory-portal-web)`**: UI Web Portal untuk manajemen proyek, user, dan pemantauan AI.
-   - **`Backend (factory-portal-service)`**: Core API & User Management untuk validasi whitelist, RBAC proyek, manajemen token/JWT, dan penyedia context ke Hermes.
+   - **`Backend (factory-portal-service)`**: Pintu autentikasi utama, validasi whitelist nomor HP, mengembalikan **User Key**, RBAC proyek, manajemen JWT, serta mengelola penulisan izin ke cache context.
 
 3. **Hermes Gateway Layer (`factory-agent-adapter` & `Hermes Gateway`)**:
-   - **`Middleware Hermes (factory-agent-adapter)`**: Lapisan perantara / adapter untuk memvalidasi otorisasi request (dari Portal / Telegram), mengelola isolasi *session scope*, dan meneruskan payload ke API Gateway.
+   - **`Middleware Hermes (factory-agent-adapter)`**: Menerima request transaksi chat yang membawa **User Key** yang sah dari Telegram Middleware maupun Web Portal, memvalidasi otorisasi & context scope, lalu mem-forward payload ke REST API Hermes Gateway.
    - **`Hermes Gateway`**: REST API Gateway resmi yang mengekspos endpoint pemanggilan LLM/Agent (`POST /v1/runs`, `/sessions`, health checks).
 
 4. **Hermes (Core Engine)**:
@@ -97,20 +99,46 @@ flowchart TD
 
 ## 📝 4. Breakdown Task yang Harus Dilakukan
 
-*(Bagian ini dikosongkan terlebih dahulu dan akan ditambahkan secara bertahap)*
+### Task 1: Setup Telegram Middleware, Koneksi Bot, & Project Selection Flow
+* **Objective**: Menginisialisasi service Telegram Middleware yang terhubung ke platform Telegram, mengintegrasikan alur autentikasi user untuk mendapatkan **User Key** dari Backend (`factory-portal-service`), serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
+* **Estimasi Durasi**: `1 - 2 Hari`
+* **Yang Harus Dikerjakan**:
+  1. **Koneksi Bot & Telegram Middleware**:
+     - Setup service Telegram Middleware menggunakan `python-telegram-bot` (Async).
+     - Sambungkan bot token resmi dan pastikan bot dapat menerima event/pesan dari Telegram.
+  2. **Autentikasi & Pengambilan User Key**:
+     - Handler verifikasi user (via `/start` & Share Contact).
+     - Panggil endpoint autentikasi Backend (`factory-portal-service`) untuk validasi whitelist nomor HP / Telegram ID.
+     - Simpan **User Key** yang dikembalikan oleh Backend sebagai kredensial valid untuk transaksi berikutnya.
+  3. **Load Daftar Proyek (`/projects`)**:
+     - Buat command handler `/projects`.
+     - Request daftar proyek yang diizinkan untuk user tersebut ke Backend (`factory-portal-service`) menggunakan User Key.
+     - Tampilkan list proyek berpenomoran (misalnya nomor 1 s.d. 10) beserta instruksi pemilihan.
+  4. **Pilih Proyek Aktif (`/project-active-<nomor>` / Command Selector)**:
+     - Buat handler pemilihan proyek (contoh: user mengetik `/project-active-1` atau menekan tombol proyek 1).
+     - Set konteks `active_project_id` di cache/session state pengguna.
+     - Kirim konfirmasi ke user bahwa proyek aktif telah berhasil diset dan siap untuk bertransaksi dengan AI Agent.
+* **Potential Obstacle (Kendala)**:
+  - *Kendala*: User mencoba menjalankan `/projects` atau `/project-active-<id>` sebelum melakukan autentikasi / belum memiliki User Key yang valid.
+  - *Solusi*: Berikan middleware validation guard. Jika `User Key` belum ada di session cache, arahkan user secara otomatis untuk `/start` dan membagikan kontak terlebih dahulu.
+* **Definition of Done (DoD)**:
+  - Service Telegram Middleware aktif dan tersambung ke Telegram.
+  - User yang terverifikasi berhasil mendapatkan User Key dari Backend (`factory-portal-service`).
+  - Command `/projects` sukses menampilkan daftar proyek dari Backend, dan command `/project-active-<id>` berhasil menyetel proyek aktif pengguna.
 
 ---
 
 ## ⏱️ 5. Estimasi Total Durasi & Urutan Pengerjaan
 
-*(Akan disesuaikan setelah rincian task ditambahkan)*
+*(Akan disesuaikan seiring penambahan task berikutnya)*
 
 ---
 
 ## 📌 6. Ringkasan Singkat yang Perlu Diingat
 
 1. **Jangan biarkan Hermes CLI memegang Bot Telegram langsung** $\rightarrow$ Pisahkan ke layer middleware/portal.
-2. **Gunakan `request_contact=True`** $\rightarrow$ Anti-spoofing nomor HP.
-3. **Selalu sertakan `session_id` unik pada setiap `POST /v1/runs` ke Hermes** $\rightarrow$ Memori tidak akan pernah tumpang tindih.
-4. **Gunakan `X-Device-Id: tg_<id>`** $\rightarrow$ User bisa buka Web Portal dan Telegram bersamaan tanpa saling *kick*.
-5. **Simpan hasil keluaran & artefak di MinIO** $\rightarrow$ Tersentralisasi dan dapat diakses baik oleh Web Portal maupun bot.
+2. **Autentikasi ke Backend terlebih dahulu** $\rightarrow$ Dapatkan `User Key` sebelum mengizinkan transaksi chat ke `factory-agent-adapter` (Middleware Hermes).
+3. **Gunakan `request_contact=True`** $\rightarrow$ Anti-spoofing nomor HP.
+4. **Selalu sertakan `session_id` unik pada setiap `POST /v1/runs` ke Hermes** $\rightarrow$ Memori tidak akan pernah tumpang tindih.
+5. **Gunakan `X-Device-Id: tg_<id>`** $\rightarrow$ User bisa buka Web Portal dan Telegram bersamaan tanpa saling *kick*.
+6. **Simpan hasil keluaran & artefak di MinIO** $\rightarrow$ Tersentralisasi dan dapat diakses baik oleh Web Portal maupun bot.

@@ -51,8 +51,8 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <-->|Auth & Whitelist| WebBE
-    TeleMW -->|Forward Chat & Session Scope| HMW
+    TeleMW <-->|1. Auth & Return User Key| WebBE
+    TeleMW -->|2. Transaksi Chat + User Key| HMW
     WebBE <-->|Trusted Context & Runs| HMW
     HGW <--> HermesCore
     HermesCore <--> MinIO
