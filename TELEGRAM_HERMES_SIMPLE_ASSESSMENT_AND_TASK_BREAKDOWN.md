@@ -143,14 +143,17 @@ flowchart TD
   - **Task 1 selesai** (Bot Telegram sudah aktif dan terhubung ke service Telegram Middleware).
   - Service Backend `factory-portal-service` dan database identitas (`usermanagement-svc` / DB Whitelist) sudah running.
   - Tabel whitelist karyawan (`tbl_employee_whitelist`) sudah memiliki sample data nomor HP untuk pengujian.
-  - Konfigurasi URL backend (`BACKEND_PORTAL_BASE_URL`) dan endpoint auth exchange sudah disiapkan.
-* **Objective**: Mengintegrasikan alur autentikasi user Telegram Middleware ke Backend (`factory-portal-service`) untuk validasi whitelist nomor HP/identitas user, menyimpan **User Key** (JWT Token & Context ID), serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
+  - Konfigurasi URL backend (`BACKEND_PORTAL_BASE_URL`) dan endpoint auth exchange / refresh (`POST /auth/refresh`) sudah disiapkan.
+* **Objective**: Mengintegrasikan alur autentikasi user Telegram Middleware ke Backend (`factory-portal-service`) untuk validasi whitelist nomor HP/identitas user, menyimpan **User Key** (`accessToken` JWT dengan TTL 5 menit) beserta `refreshToken`, serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
-  1. **Autentikasi & Pengambilan User Key**:
+  1. **Autentikasi & Pengambilan Token Set**:
      - Handler verifikasi user (via `/start` & Share Contact).
      - Panggil endpoint autentikasi Backend (`factory-portal-service`) untuk validasi whitelist nomor HP / Telegram ID.
-     - Simpan **User Key** yang dikembalikan oleh Backend sebagai kredensial valid untuk transaksi berikutnya.
+     - Simpan payload token yang dikembalikan Backend ke Session Cache (Redis/Local Memory):
+       - `accessToken` (`User Key` untuk transaksi ke adapter, TTL default backend 5 menit).
+       - `refreshToken` (untuk memperbarui token tanpa login ulang).
+       - `expiresAt` (timestamp masa kedaluwarsa token).
   2. **Load Daftar Proyek (`/projects`)**:
      - Buat command handler `/projects`.
      - Request daftar proyek yang diizinkan untuk user tersebut ke Backend (`factory-portal-service`) menggunakan User Key.
@@ -163,7 +166,7 @@ flowchart TD
   - *Kendala*: User mencoba menjalankan `/projects` atau `/project-active-<id>` sebelum melakukan autentikasi / belum memiliki User Key yang valid.
   - *Solusi*: Berikan middleware validation guard. Jika `User Key` belum ada di session cache, arahkan user secara otomatis untuk `/start` dan membagikan kontak terlebih dahulu.
 * **Definition of Done (DoD)**:
-  - User yang terverifikasi berhasil mendapatkan User Key dari Backend (`factory-portal-service`).
+  - User yang terverifikasi berhasil mendapatkan token set (`accessToken` + `refreshToken`) dari Backend (`factory-portal-service`).
   - Command `/projects` sukses menampilkan daftar proyek dari Backend, dan command `/project-active-<id>` berhasil menyetel proyek aktif pengguna.
 
 ---
@@ -174,7 +177,7 @@ flowchart TD
   - Service `factory-agent-adapter` (port `:8090`) dan Hermes Gateway (`:8643`) sudah running dan berstatus healthy.
   - Tenant ID dan Project ID valid sudah terdaftar di sistem.
   - Library HTTP Async `httpx` terinstal di environment Telegram Middleware.
-* **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi upstream (`POST /channel/sessions`) dengan peran agen dedicated, serialisasi pengiriman pesan teks & attachment berkas (multipart), penanganan respon generate AI (SSE Stream / Polling), pembatalan proses (`/stop`), reset percakapan (`/newchat`), dan auto-save session berbasis UUID resmi dari Hermes/Adapter.
+* **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi upstream (`POST /channel/sessions`) dengan peran agen dedicated, serialisasi pengiriman pesan teks & attachment berkas (multipart), penanganan respon generate AI (SSE Stream / Polling), pembatalan proses (`/stop`), reset percakapan (`/newchat`), **penanganan silent auto-refresh token tiap 5 menit**, dan auto-save session berbasis UUID resmi dari Hermes/Adapter.
 * **Estimasi Durasi**: `2 - 3 Hari`
 * **Yang Harus Dikerjakan**:
   1. **Inisiasi Sesi Upstream (`POST /channel/sessions`)**:
@@ -200,16 +203,25 @@ flowchart TD
   4. **Fitur Reset Percakapan (`/newchat`) & Pembatalan (`/stop`)**:
      - **Command `/newchat`**: Memanggil `POST /channel/sessions` baru untuk membuat session UUID bersih di proyek aktif yang sama.
      - **Command `/stop`**: Memanggil `POST /channel/generations/{processId}/stop` ke `factory-agent-adapter` untuk menghentikan proses generate AI yang sedang berlangsung.
-  5. **Penanganan Token Expired (JWT Expiry Strategy)**:
-     - Jika request ke adapter menghasilkan `401 Unauthorized` karena token kedaluwarsa, middleware secara otomatis melakukan re-exchange ke Backend Portal atau memberikan notifikasi ramah bagi user untuk menyegarkan sesi.
+  5. **Penanganan Refresh Token 5 Menit (Silent Auto-Refresh Strategy)**:
+     - **Mekanisme Proaktif (Pre-flight Sliding Window Check)**:
+       - Sebelum mengeksekusi request chat ke `factory-agent-adapter`, middleware mengecek sisa masa berlaku `accessToken` (`expiresAt`).
+       - Jika sisa waktu $\le 60$ detik (mendekati batas expiry 5 menit), middleware **secara otomatis menembak `POST /auth/refresh`** ke Backend Portal dengan membawa `refreshToken`.
+       - Token baru (`accessToken` baru + `refreshToken` baru) langsung di-update di Redis/cache tanpa menunggu error terjadi.
+     - **Mekanisme Reaktif (HTTP 401 Interceptor with Auto-Retry)**:
+       - Jika request ke adapter tetap menghasilkan respon `401 Unauthorized`, HTTP client interceptor (`httpx`) menangkap respon tersebut, langsung memicu pemanggilan `POST /auth/refresh` ke Backend Portal, memperbarui token di cache, dan **otomatis me-retry 1x request yang gagal tadi**.
+       - **Hasil**: Pengguna di Telegram mengalami pengalaman *zero interruption* (tidak pernah terputus atau gagal chat hanya karena siklus refresh 5 menit dari backend).
+     - **Fallback Re-Autentikasi**:
+       - Jika `refreshToken` sudah kedaluwarsa sepenuhnya (misal pengguna tidak aktif selama berhari-hari), kirim pesan panduan ramah ke Telegram agar pengguna mengklik `/start` untuk memperbarui sesi.
   6. **Auto-Save Session & Riwayat Obrolan**:
      - Riwayat pesan otomatis tersimpan di sisi adapter & Hermes berdasarkan session UUID aktif.
 * **Potential Obstacle (Kendala)**:
-  - *Kendala*: Terjadi jeda koneksi saat mengonsumsi stream respon, parse error pada format teks markdown, atau ukuran file attachment melebihi batas (5MB/file).
-  - *Solusi*: Gunakan streaming non-blocking dengan retry policy, parser HTML/Markdown sanitizer, dan validasi ukuran file sebelum upload.
+  - *Kendala*: Terjadi jeda koneksi saat mengonsumsi stream respon, parse error pada format teks markdown, atau kegagalan refresh token saat backend sibuk.
+  - *Solusi*: Terapkan arsitektur retry dengan backoff pada refresh token interceptor, parser HTML/Markdown sanitizer, dan streaming non-blocking.
 * **Definition of Done (DoD)**:
   - Sesi obrolan berhasil dibuka di `factory-agent-adapter` sesuai role agen dedicated bot.
   - Pesan teks dan file attachment user berhasil terkirim dan AI Agent merespon secara lancar ke antarmuka Telegram.
+  - **Siklus refresh token 5 menit berjalan 100% transparan (silent auto-refresh) tanpa mengganggu pengguna Telegram.**
   - Fitur `/newchat` dan `/stop` berfungsi sesuai standar backend, serta sesi obrolan tersimpan otomatis.
 
 ---
@@ -296,8 +308,9 @@ flowchart TD
 1. **1 Bot Telegram = Dedicated 1 Agent Role**: Setiap bot memiliki peran khusus (misal: Bot Business Analyst khusus `BUSINESS_ANALYST`, Bot System Analyst khusus `SYSTEM_ANALYST`) yang dikonfigurasikan via env middleware.
 2. **Pemisahan Peran Layer**: Telegram Middleware berkomunikasi langsung ke `factory-agent-adapter` untuk transaksi chat AI, dan hanya menghubungi `factory-portal-service` (Backend Portal) untuk autentikasi whitelist & query list proyek.
 3. **Kredensial User Key & Device ID**: Setiap panggilan ke `factory-agent-adapter` wajib menyertakan `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>` untuk isolasi session guard.
-4. **Standar Komunikasi Setara ("Teacher & Students")**: Pola request dan payload dari Telegram Middleware ke `factory-agent-adapter` dibuat identik dengan cara kerja Backend Portal (termasuk dukungan kirim file attachment `multipart/form-data`).
-5. **Session ID Resmi Upstream**: Sesi (UUID) di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes), bot hanya menyimpan dan mengikatkan session UUID tersebut ke pengguna.
-6. **Dukungan Reset & Pembatalan**: Tersedia command `/newchat` untuk membuka sesi baru di proyek yang sama dan command `/stop` untuk membatalkan proses generate yang sedang berlangsung.
-7. **Anti-Spoofing Nomor HP**: Verifikasi nomor HP wajib menggunakan tombol native Telegram `request_contact=True` untuk memastikan identitas nomor valid sesuai database whitelist karyawan.
-8. **Manajemen Artefak di MinIO**: Seluruh dokumen keluaran AI (BRD, FSD, Diagram, dll.) diakses melalui endpoint adapter yang terhubung ke MinIO dan dikirimkan ke chat Telegram sebagai file atau presigned URL.
+4. **Silent Auto-Refresh Token (5 Menit)**: Middleware menangani siklus kedaluwarsa token 5 menit dari backend secara mandiri (proaktif sebelum expired & reaktif interceptor saat `401`) sehingga pengguna di Telegram tidak pernah terputus atau gagal chat.
+5. **Standar Komunikasi Setara ("Teacher & Students")**: Pola request dan payload dari Telegram Middleware ke `factory-agent-adapter` dibuat identik dengan cara kerja Backend Portal (termasuk dukungan kirim file attachment `multipart/form-data`).
+6. **Session ID Resmi Upstream**: Sesi (UUID) di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes), bot hanya menyimpan dan mengikatkan session UUID tersebut ke pengguna.
+7. **Dukungan Reset & Pembatalan**: Tersedia command `/newchat` untuk membuka sesi baru di proyek yang sama dan command `/stop` untuk membatalkan proses generate yang sedang berlangsung.
+8. **Anti-Spoofing Nomor HP**: Verifikasi nomor HP wajib menggunakan tombol native Telegram `request_contact=True` untuk memastikan identitas nomor valid sesuai database whitelist karyawan.
+9. **Manajemen Artefak di MinIO**: Seluruh dokumen keluaran AI (BRD, FSD, Diagram, dll.) diakses melalui endpoint adapter yang terhubung ke MinIO dan dikirimkan ke chat Telegram sebagai file atau presigned URL.
