@@ -102,6 +102,11 @@ flowchart TD
 ## 📝 4. Breakdown Task yang Harus Dilakukan
 
 ### Task 1: Setup Akun Bot di BotFather (`@BotFather`), Menu Perintah, & Koneksi ke Telegram Middleware
+* **Prerequisites (Syarat Sebelum Memulai)**:
+  - Akun Telegram aktif (untuk mengakses `@BotFather`).
+  - Runtime Python 3.11+ dan library `python-telegram-bot` (v21 Async).
+  - Nama resmi dan username bot yang disepakati (misal `@AIFactoryAssistantBot`).
+  - Akses jaringan internet untuk menghubungi Telegram Bot API (`https://api.telegram.org`).
 * **Objective**: Mendaftarkan bot resmi di platform Telegram via `@BotFather`, mendapatkan Bot API Token, mendaftarkan menu perintah (commands) resmi, serta menetapkan arsitektur konektivitas (Long-Polling / Webhook) agar Telegram Middleware dapat menerima event dan pesan dari Telegram secara realtime.
 * **Estimasi Durasi**: `2 - 4 Jam`
 * **Yang Harus Dikerjakan**:
@@ -131,6 +136,11 @@ flowchart TD
 ---
 
 ### Task 2: Integrasi Autentikasi User Whitelist ke Backend (`factory-portal-service`), Pengambilan User Key, & Fitur Proyek
+* **Prerequisites (Syarat Sebelum Memulai)**:
+  - **Task 1 selesai** (Bot Telegram sudah aktif dan terhubung ke service Telegram Middleware).
+  - Service Backend `factory-portal-service` dan database identitas (`usermanagement-svc` / DB Whitelist) sudah running.
+  - Tabel whitelist karyawan (`tbl_employee_whitelist`) sudah memiliki sample data nomor HP untuk pengujian.
+  - Konfigurasi URL backend (`BACKEND_PORTAL_BASE_URL`) dan endpoint auth exchange sudah disiapkan.
 * **Objective**: Mengintegrasikan alur autentikasi user Telegram Middleware ke Backend (`factory-portal-service`) untuk validasi whitelist nomor HP/identitas user, menyimpan **User Key** (JWT Token & Context ID), serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
@@ -156,6 +166,11 @@ flowchart TD
 ---
 
 ### Task 3: Integrasi Komunikasi ke Middleware Hermes (`factory-agent-adapter`), Pembuatan Sesi Upstream, & Handling Respon AI
+* **Prerequisites (Syarat Sebelum Memulai)**:
+  - **Task 1 & Task 2 selesai** (Bot Telegram telah mampu mengautentikasi user dan mengantongi `User Key` serta `active_project_id`).
+  - Service `factory-agent-adapter` (port `:8090`) dan Hermes Gateway (`:8643`) sudah running dan berstatus healthy.
+  - Tenant ID dan Project ID valid sudah terdaftar di sistem.
+  - Library HTTP Async `httpx` terinstal di environment Telegram Middleware.
 * **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi via upstream (`POST /channel/sessions`), serialisasi pengiriman pesan (`POST /channel/sessions/{id}/messages`), penanganan respon generate AI (SSE Stream / Polling), serta auto-save session berbasis UUID resmi dari Hermes/Adapter.
 * **Estimasi Durasi**: `2 - 3 Hari`
 * **Yang Harus Dikerjakan**:
@@ -193,6 +208,10 @@ flowchart TD
 ---
 
 ### Task 4: Fitur Manajemen Riwayat Sesi (Get Session List & Resume Sesi Aktif)
+* **Prerequisites (Syarat Sebelum Memulai)**:
+  - **Task 3 selesai** (Alur inisiasi sesi upstream dan kirim pesan ke `factory-agent-adapter` sudah berjalan sehingga data riwayat sesi tersimpan di adapter/Hermes).
+  - Endpoint `GET /channel/sessions/recent` di `factory-agent-adapter` aktif dan dapat diakses menggunakan User Key.
+  - Storage cache (Memory / Redis) di Telegram Middleware siap digunakan untuk menyimpan mapping state sesi aktif pengguna.
 * **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar sesi percakapan terdahulu pengguna dari `factory-agent-adapter` (`GET /channel/sessions/recent`), menampilkan daftar sesi berpenomoran via Telegram (command `/session`), dan mengaktifkan sesi yang dipilih pengguna (`/session-active-<nomor>`) agar percakapan dapat dilanjutkan dengan konteks memori sesi tersebut.
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
@@ -219,6 +238,9 @@ flowchart TD
 ---
 
 ### Task 5: Manajemen & Akses Artefak Dokumen Proyek (`/artifact-list` & `/artifact-select-<nomor>`)
+* **Prerequisites (Syarat Sebelum Memulai)**:
+  - **Task 2 & Task 3 selesai** (Pengguna telah memiliki proyek aktif dan minimal pernah melakukan satu kali generate dokumen/artefak via AI Agent).
+  - Service Object Storage MinIO dan endpoint `GET /channel/artifacts` serta `POST .../download-url` di `factory-agent-adapter` aktif dan dapat menghasilkan Presigned Download URL MinIO.
 * **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar artefak/dokumen hasil generate AI Agent dari `factory-agent-adapter` (yang tersimpan di MinIO) berdasarkan proyek/sesi aktif pengguna, menampilkannya via command `/artifact-list`, serta menyediakan fitur pemilihan & pengunduhan dokumen via command `/artifact-select-<nomor>`.
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
