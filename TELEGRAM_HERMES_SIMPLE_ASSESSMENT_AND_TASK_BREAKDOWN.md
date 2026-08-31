@@ -128,33 +128,40 @@ flowchart TD
 
 ---
 
-### Task 2: Payload Serialization (String to JSON Body), Komunikasi ke Middleware Hermes (`factory-agent-adapter`), & Session Management
-* **Objective**: Mengimplementasikan logika transformasi pesan teks Telegram menjadi payload body JSON valid yang mengikutsertakan **User Key** & context proyek, mengirimkannya ke `factory-agent-adapter` (Middleware Hermes), menangani respon hasil generate AI, serta mengelola auto-save session dan standarisasi penamaan `session_id` yang kompatibel dengan backend.
+### Task 2: Integrasi Komunikasi ke Middleware Hermes (`factory-agent-adapter`), Pembuatan Sesi Upstream, & Handling Respon AI
+* **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi via upstream (`POST /channel/sessions`), serialisasi pengiriman pesan (`POST /channel/sessions/{id}/messages`), penanganan respon generate AI (SSE Stream / Polling), serta auto-save session berbasis UUID resmi dari Hermes/Adapter.
 * **Estimasi Durasi**: `2 - 3 Hari`
 * **Yang Harus Dikerjakan**:
-  1. **String Manipulation & JSON Body Builder**:
-     - Menangkap input prompt/chat teks dari user di Telegram.
-     - Memanipulasi dan memformat string tersebut ke dalam JSON Request Body sesuai kontrak API `factory-agent-adapter`.
-     - Menyematkan metadata autentikasi: **User Key**, `project_id` aktif, role AI (misal: `system-analyst` / `business-analyst`), dan `session_id`.
-  2. **Komunikasi Asinkronus ke `factory-agent-adapter`**:
-     - Mengirim request HTTP POST menggunakan `httpx` (Async Client) ke endpoint run `factory-agent-adapter`.
-     - Memberikan feedback visual *typing action* (`send_chat_action("typing")`) ke user Telegram selama proses generate berlangsung agar user mengetahui AI sedang berpikir.
-  3. **Handling Respon AI & Chunking**:
-     - Menerima hasil respon/generate dari `factory-agent-adapter` (teks analisis, markdown, atau ringkasan dokumen).
-     - Memformat output pesan ke format Telegram MarkdownV2/HTML yang rapi.
+  1. **Inisiasi Sesi Upstream (`POST /channel/sessions`)**:
+     - Membuka/membuat sesi percakapan ke `factory-agent-adapter` dengan payload JSON:
+       ```json
+       {
+         "channel": "TELEGRAM",
+         "agentRole": "SYSTEM_ANALYST",
+         "tenantId": "<tenant_uuid>",
+         "projectId": "<active_project_uuid>"
+       }
+       ```
+     - Menyertakan headers wajib: `Authorization: Bearer <User Key>`, `X-Device-Id: tg_<user_id>`, dan `Idempotency-Key: <uuid>`.
+     - **Catatan Sesi**: `session_id` (UUID) di-generate langsung secara resmi oleh upstream (`factory-agent-adapter` / Hermes), sehingga bot cukup menyimpan UUID session yang dikembalikan untuk percakapan aktif.
+  2. **Serialisasi Pengiriman Pesan (`POST /channel/sessions/{id}/messages`)**:
+     - Mengubah pesan teks dari user Telegram menjadi request body (multipart/form) yang memuat field `message` dan `markdownMode`.
+     - Mengirim request ke `factory-agent-adapter` menggunakan `httpx` (Async Client) dengan menyertakan User Key & Device ID.
+     - Mengirim status visual *typing action* (`send_chat_action("typing")`) ke Telegram agar pengguna mengetahui AI sedang memproses generate.
+  3. **Handling Respon AI & Chunking (SSE Stream / Polling)**:
+     - Menangkap `processId` dari respon awal `202 Accepted` dan mengonsumsi stream respon via SSE (`GET /channel/sessions/{id}/stream?processId=...`) atau polling riwayat pesan.
+     - Memformat output pesan ke Markdown Telegram secara rapi.
      - Mengimplementasikan text chunking jika respon teks melebihi batas 4.096 karakter Telegram.
-  4. **Auto-Save Session & Penyelarasan Format `session_id`**:
-     - Mengaktifkan fitur penyimpanan sesi secara otomatis (`auto-save session`) setelah eksekusi generate berhasil.
-     - Menyelaraskan konvensi penamaan format `session_id` dengan Backend (`factory-portal-service`), misalnya:
-       `tg_{user_id}_{project_id}_{session_uuid}`
-       agar memori percakapan terisolasi penuh, tidak tertukar antar-proyek/user, dan mudah ditelusuri di Redis & database.
+  4. **Auto-Save Session & Riwayat Obrolan**:
+     - Riwayat pesan otomatis tersimpan di sisi adapter & Hermes berdasarkan session UUID aktif.
+     - Bot menyimpan mapping user $\leftrightarrow$ active `sessionId` di cache lokal/Redis agar percakapan berikutnya otomatis melanjutkan konteks sesi yang sama tanpa perlu inisiasi ulang.
 * **Potential Obstacle (Kendala)**:
-  - *Kendala*: Format penamaan `session_id` tidak seragam antara Telegram Bot dan Web Portal, atau request timeout saat LLM memproses data yang sangat besar.
-  - *Solusi*: Sepakati struktur prefix `session_id` yang standar dengan tim backend, serta terapkan timeout konfigurasi yang cukup (misal 60-120 detik) pada HTTP Client `httpx`.
+  - *Kendala*: Terjadi jeda koneksi saat mengonsumsi stream respon atau request timeout saat proses generate AI membutuhkan waktu cukup lama.
+  - *Solusi*: Gunakan streaming non-blocking dengan retry policy dan setting timeout HTTP Client yang memadai (60 - 120 detik).
 * **Definition of Done (DoD)**:
-  - Input string pengguna berhasil diubah menjadi JSON body yang valid dan diterima oleh `factory-agent-adapter`.
-  - Respon hasil generate AI Agent berhasil tampil di chat Telegram pengguna secara utuh.
-  - Sesi obrolan tersimpan otomatis dengan format penamaan `session_id` yang sesuai standar backend.
+  - Sesi obrolan berhasil dibuka di `factory-agent-adapter` dan mengembalikan session UUID resmi dari upstream.
+  - Pesan user berhasil terkirim dan AI Agent merespon secara lancar ke antarmuka Telegram.
+  - Sesi obrolan tersimpan otomatis dan pengguna dapat melanjutkan percakapan berkonteks.
 
 ---
 
@@ -168,7 +175,7 @@ flowchart TD
 
 1. **Jangan biarkan Hermes CLI memegang Bot Telegram langsung** $\rightarrow$ Pisahkan ke layer middleware/portal.
 2. **Autentikasi ke Backend terlebih dahulu** $\rightarrow$ Dapatkan `User Key` sebelum mengizinkan transaksi chat ke `factory-agent-adapter` (Middleware Hermes).
-3. **Gunakan `request_contact=True`** $\rightarrow$ Anti-spoofing nomor HP.
-4. **Selalu sertakan `session_id` unik pada setiap `POST /v1/runs` ke Hermes** $\rightarrow$ Memori tidak akan pernah tumpang tindih.
+3. **Session ID dibuat oleh Upstream** $\rightarrow$ `factory-agent-adapter` / Hermes yang meng-generate UUID sesi, bot cukup menyimpan dan menggunakannya.
+4. **Gunakan `request_contact=True`** $\rightarrow$ Anti-spoofing nomor HP.
 5. **Gunakan `X-Device-Id: tg_<id>`** $\rightarrow$ User bisa buka Web Portal dan Telegram bersamaan tanpa saling *kick*.
 6. **Simpan hasil keluaran & artefak di MinIO** $\rightarrow$ Tersentralisasi dan dapat diakses baik oleh Web Portal maupun bot.
