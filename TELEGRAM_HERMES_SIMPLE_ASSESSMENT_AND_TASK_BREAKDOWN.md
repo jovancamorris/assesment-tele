@@ -128,6 +128,36 @@ flowchart TD
 
 ---
 
+### Task 2: Payload Serialization (String to JSON Body), Komunikasi ke Middleware Hermes (`factory-agent-adapter`), & Session Management
+* **Objective**: Mengimplementasikan logika transformasi pesan teks Telegram menjadi payload body JSON valid yang mengikutsertakan **User Key** & context proyek, mengirimkannya ke `factory-agent-adapter` (Middleware Hermes), menangani respon hasil generate AI, serta mengelola auto-save session dan standarisasi penamaan `session_id` yang kompatibel dengan backend.
+* **Estimasi Durasi**: `2 - 3 Hari`
+* **Yang Harus Dikerjakan**:
+  1. **String Manipulation & JSON Body Builder**:
+     - Menangkap input prompt/chat teks dari user di Telegram.
+     - Memanipulasi dan memformat string tersebut ke dalam JSON Request Body sesuai kontrak API `factory-agent-adapter`.
+     - Menyematkan metadata autentikasi: **User Key**, `project_id` aktif, role AI (misal: `system-analyst` / `business-analyst`), dan `session_id`.
+  2. **Komunikasi Asinkronus ke `factory-agent-adapter`**:
+     - Mengirim request HTTP POST menggunakan `httpx` (Async Client) ke endpoint run `factory-agent-adapter`.
+     - Memberikan feedback visual *typing action* (`send_chat_action("typing")`) ke user Telegram selama proses generate berlangsung agar user mengetahui AI sedang berpikir.
+  3. **Handling Respon AI & Chunking**:
+     - Menerima hasil respon/generate dari `factory-agent-adapter` (teks analisis, markdown, atau ringkasan dokumen).
+     - Memformat output pesan ke format Telegram MarkdownV2/HTML yang rapi.
+     - Mengimplementasikan text chunking jika respon teks melebihi batas 4.096 karakter Telegram.
+  4. **Auto-Save Session & Penyelarasan Format `session_id`**:
+     - Mengaktifkan fitur penyimpanan sesi secara otomatis (`auto-save session`) setelah eksekusi generate berhasil.
+     - Menyelaraskan konvensi penamaan format `session_id` dengan Backend (`factory-portal-service`), misalnya:
+       `tg_{user_id}_{project_id}_{session_uuid}`
+       agar memori percakapan terisolasi penuh, tidak tertukar antar-proyek/user, dan mudah ditelusuri di Redis & database.
+* **Potential Obstacle (Kendala)**:
+  - *Kendala*: Format penamaan `session_id` tidak seragam antara Telegram Bot dan Web Portal, atau request timeout saat LLM memproses data yang sangat besar.
+  - *Solusi*: Sepakati struktur prefix `session_id` yang standar dengan tim backend, serta terapkan timeout konfigurasi yang cukup (misal 60-120 detik) pada HTTP Client `httpx`.
+* **Definition of Done (DoD)**:
+  - Input string pengguna berhasil diubah menjadi JSON body yang valid dan diterima oleh `factory-agent-adapter`.
+  - Respon hasil generate AI Agent berhasil tampil di chat Telegram pengguna secara utuh.
+  - Sesi obrolan tersimpan otomatis dengan format penamaan `session_id` yang sesuai standar backend.
+
+---
+
 ## ⏱️ 5. Estimasi Total Durasi & Urutan Pengerjaan
 
 *(Akan disesuaikan seiring penambahan task berikutnya)*
