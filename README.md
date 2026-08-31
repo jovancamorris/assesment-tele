@@ -51,10 +51,10 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <-->|1. Auth & Return User Key| WebBE
-    TeleMW -->|2. Transaksi Chat + User Key| HMW
-    WebBE <-->|Trusted Context & Runs| HMW
-    HGW <--> HermesCore
+    TeleMW <-->|1. Auth & Dapatkan User Key + List Projects| WebBE
+    TeleMW -->|2. Transaksi Chat Langsung (Pola Setara BE)| HMW
+    WebBE <-->|Transaksi Chat Portal| HMW
+    HGW <-->|POST /v1/runs| HermesCore
     HermesCore <--> MinIO
     WebBE -.-> MinIO
 ```

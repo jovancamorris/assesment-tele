@@ -9,11 +9,11 @@
 
 ## 🎯 1. Ringkasan Proyek & Tujuan
 
-Mengubah Telegram Bot yang sebelumnya terhubung langsung via Hermes CLI (yang menyebabkan **chat publik tanpa izin** dan **memori saling tumpang tindih**) menjadi:
+Mengubah integrasi Telegram Bot dari yang sebelumnya terhubung langsung via Hermes CLI (menyebabkan **chat publik tanpa izin** dan **memori saling tumpang tindih**) menjadi:
 1. **Akses Terbatas (Whitelist)**: Hanya nomor HP yang terdaftar di database karyawan yang bisa memakai bot.
 2. **Standalone UX di Telegram**: Registrasi langsung via tombol *Share Contact* native Telegram tanpa wajib login ke web portal.
-3. **Arsitektur 1 Pintu**: Telegram Bot masuk melalui Backend Portal (`factory-portal-service`), sehingga *Trusted Context* (Redis) aktif dan AI Agent bisa commit ke GitLab.
-4. **Isolasi Memori 100%**: Hermes menerima `session_id` unik untuk tiap user & proyek sehingga memori tidak akan pernah tertukar/tertimpa.
+3. **Komunikasi Langsung & Terstandarisasi ke Adapter**: Telegram Middleware langsung berkomunikasi ke `factory-agent-adapter` (Middleware Hermes) menggunakan pola dan standar kontrak API yang sama persis seperti yang digunakan oleh Backend Portal.
+4. **Isolasi Memori 100%**: Sesi percakapan di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes) sehingga memori tidak akan pernah tertukar atau tertimpa.
 
 ---
 
@@ -50,10 +50,10 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <-->|1. Auth & Return User Key| WebBE
-    TeleMW -->|2. Transaksi Chat + User Key| HMW
-    WebBE <-->|Trusted Context & Runs| HMW
-    HGW <--> HermesCore
+    TeleMW <-->|1. Auth & Dapatkan User Key + List Projects| WebBE
+    TeleMW -->|2. Transaksi Chat Langsung (Pola Setara BE)| HMW
+    WebBE <-->|Transaksi Chat Portal| HMW
+    HGW <-->|POST /v1/runs| HermesCore
     HermesCore <--> MinIO
     WebBE -.-> MinIO
 ```
@@ -61,30 +61,26 @@ flowchart TD
 ### 🧩 Deskripsi Komponen & Peran:
 
 1. **Telegram Layer (`Tele Bot App` & `Telegram Middleware`)**:
-   - **`Tele Bot App`**: Menangani interaksi pengguna di Telegram (command `/start`, `/projects`, `/project-active-<id>`, chat teks, dan tombol native *Share Contact*).
+   - **`Tele Bot App`**: Antarmuka bot Telegram pengguna (command `/start`, `/projects`, `/project-active-<id>`, chat teks, dan tombol native *Share Contact*).
    - **`Telegram Middleware`**: 
-     - Melakukan proses autentikasi awal ke **`factory-portal-service` (Backend)** untuk validasi whitelist user dan mendapatkan **User Key** (JWT Token & Context ID).
-     - Mengirimkan pesan/prompt pengguna melalui salah satu dari 2 pintu integrasi:
-       - **Pintu Backend Portal (`factory-portal-service`)**: Menggunakan endpoint `/agent-conversations` (Trusted Context aman dengan RBAC terpusat).
-       - **Pintu Langsung ke Adapter (`factory-agent-adapter`)**: Menggunakan endpoint `/channel/sessions` dan `/channel/sessions/{id}/messages`.
+     - **Auth & Metadata**: Memanggil **`factory-portal-service` (Backend)** untuk validasi whitelist nomor HP, mendapatkan **User Key** (JWT Token), dan mengambil daftar proyek (`/projects`).
+     - **Transaksi Chat Mandiri**: Setelah mengantongi User Key dan Proyek Aktif, Telegram Middleware **langsung menembak ke `factory-agent-adapter`** (`POST /channel/sessions`, `POST /channel/sessions/{id}/messages`, dan streaming SSE) dengan cara kerja dan kontrak request yang setara dengan Backend Portal.
 
 2. **Web Portal (`factory-portal-web` [FE] & `factory-portal-service` [BE])**:
-   - **`Frontend (factory-portal-web)`**: UI Web Portal untuk manajemen proyek, user, dan pemantauan AI.
-   - **`Backend (factory-portal-service)`**: 
-     - Pintu autentikasi utama, validasi whitelist nomor HP, mengembalikan **User Key**, RBAC proyek, manajemen JWT, serta mengelola penulisan izin ke cache context (`AgentContextStore`).
-     - Menyediakan API percakapan agen via **`/agent-conversations`** (`POST /agent-conversations`, `POST /{portalConversationId}/messages`, `GET /{portalConversationId}/stream`).
+   - **`Frontend (factory-portal-web)`**: UI Web Portal untuk pengguna web (manajemen proyek, monitoring, dsb.).
+   - **`Backend (factory-portal-service)`**: Pusat otentikasi identitas, validasi whitelist nomor HP, manajemen RBAC proyek, penyedia token/User Key, dan penyedia context store.
 
 3. **Hermes Gateway Layer (`factory-agent-adapter` & `Hermes Gateway`)**:
    - **`Middleware Hermes (factory-agent-adapter)`**: 
-     - Menerima request dari Backend Portal maupun bot, mengelola isolasi sesi (`/channel/sessions`), device lock (`X-Device-Id`), dan idempotency key.
-     - **Menerjemahkan request pesan menjadi pemanggilan Hermes Gateway `POST /v1/runs`** dan merelay event SSE `GET /v1/runs/{id}/events` ke client.
-   - **`Hermes Gateway`**: REST API Gateway resmi (`:8643`) yang menjalankan eksekusi AI Agent via **`POST /v1/runs`**, `POST /v1/runs/{id}/stop`, dan `POST /v1/runs/{id}/approval`.
+     - Pusat standar komunikasi (single gateway adapter) yang melayani request percakapan baik dari Web Portal maupun Telegram Middleware.
+     - Mengelola sesi upstream (`/channel/sessions`), device lock (`X-Device-Id`), idempotency, dan **menerjemahkan request pesan menjadi pemanggilan Hermes Gateway `POST /v1/runs`**.
+   - **`Hermes Gateway`**: REST API Gateway resmi (`:8643`) yang menjalankan eksekusi AI Agent via **`POST /v1/runs`** dan event stream.
 
 4. **Hermes (Core Engine)**:
-   - Engine AI Agent murni yang menjalankan eksekusi tugas, skills, dan reasoning tanpa terhubung langsung ke chat publik Telegram.
+   - Engine AI Agent murni yang menjalankan reasoning, tools, dan eksekusi prompt secara stateless.
 
 5. **Artifact Storage (`MinIO`)**:
-   - Object Storage S3-compatible tersentralisasi untuk menyimpan berkas keluaran AI (dokumen hasil generate, artifact, file analisa, dan log) yang dapat dibaca/ditulis oleh Hermes dan Web Portal.
+   - Object Storage S3-compatible tersentralisasi untuk menyimpan file keluaran/dokumen AI yang dapat diakses oleh Hermes dan Web Portal.
 
 ---
 
