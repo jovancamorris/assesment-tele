@@ -101,22 +101,48 @@ flowchart TD
 
 ## 📝 4. Breakdown Task yang Harus Dilakukan
 
-### Task 1: Setup Telegram Middleware, Koneksi Bot, & Project Selection Flow
-* **Objective**: Menginisialisasi service Telegram Middleware yang terhubung ke platform Telegram, mengintegrasikan alur autentikasi user untuk mendapatkan **User Key** dari Backend (`factory-portal-service`), serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
+### Task 1: Setup Akun Bot di BotFather (`@BotFather`), Menu Perintah, & Koneksi ke Telegram Middleware
+* **Objective**: Mendaftarkan bot resmi di platform Telegram via `@BotFather`, mendapatkan Bot API Token, mendaftarkan menu perintah (commands) resmi, serta menetapkan arsitektur konektivitas (Long-Polling / Webhook) agar Telegram Middleware dapat menerima event dan pesan dari Telegram secara realtime.
+* **Estimasi Durasi**: `2 - 4 Jam`
+* **Yang Harus Dikerjakan**:
+  1. **Registrasi Bot & Pengamanan Token**:
+     - Buka `@BotFather` di Telegram, jalankan `/newbot` untuk membuat bot baru.
+     - Simpan Bot Token (format `123456:ABC-DEF...`) dengan aman ke dalam file environment / Kubernetes Secret (`telegram-bot-secret`).
+  2. **Pendaftaran Menu Perintah Navigasi (`/setcommands`)**:
+     - Daftarkan list perintah standar di BotFather:
+       ```text
+       start - Mulai bot & verifikasi identitas (Share Contact)
+       projects - Tampilkan daftar proyek yang dapat diakses
+       session - Tampilkan riwayat sesi percakapan
+       artifact_list - Tampilkan daftar artefak dokumen proyek
+       help - Panduan penggunaan dan format perintah
+       ```
+  3. **Setup Mekanisme Koneksi ke Telegram Middleware**:
+     - **Mode Development / Staging**: Gunakan mode **Long-Polling Async** (`python-telegram-bot`) agar bot dapat langsung menerima update di local environment tanpa membutuhkan public IP/SSL.
+     - **Mode Production**: Siapkan opsi **HTTPS Webhook** melalui Kubernetes Ingress dengan sertifikat SSL valid.
+  4. **Health Check Konektivitas**:
+     - Pastikan service Telegram Middleware berhasil memanggil `getMe` ke Telegram API dan siap menangani webhook/polling update.
+* **Potential Obstacle (Kendala)**:
+  - *Kendala*: Webhook Telegram mewajibkan sertifikat SSL publik yang valid jika dideploy di server.
+  - *Solusi*: Gunakan Long-Polling untuk fase development/testing, dan gunakan Webhook dengan Kubernetes cert-manager saat rilis production.
+* **Definition of Done (DoD)**:
+  - Bot Telegram aktif, menu command resmi tampil di Telegram, dan Telegram Middleware sukses menerima update/pesan pertama.
+
+---
+
+### Task 2: Integrasi Autentikasi User Whitelist ke Backend (`factory-portal-service`), Pengambilan User Key, & Fitur Proyek
+* **Objective**: Mengintegrasikan alur autentikasi user Telegram Middleware ke Backend (`factory-portal-service`) untuk validasi whitelist nomor HP/identitas user, menyimpan **User Key** (JWT Token & Context ID), serta mengimplementasikan fitur load dan pemilihan active project (`/projects` & `/project-active-<id>`).
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
-  1. **Koneksi Bot & Telegram Middleware**:
-     - Setup service Telegram Middleware menggunakan `python-telegram-bot` (Async).
-     - Sambungkan bot token resmi dan pastikan bot dapat menerima event/pesan dari Telegram.
-  2. **Autentikasi & Pengambilan User Key**:
+  1. **Autentikasi & Pengambilan User Key**:
      - Handler verifikasi user (via `/start` & Share Contact).
      - Panggil endpoint autentikasi Backend (`factory-portal-service`) untuk validasi whitelist nomor HP / Telegram ID.
      - Simpan **User Key** yang dikembalikan oleh Backend sebagai kredensial valid untuk transaksi berikutnya.
-  3. **Load Daftar Proyek (`/projects`)**:
+  2. **Load Daftar Proyek (`/projects`)**:
      - Buat command handler `/projects`.
      - Request daftar proyek yang diizinkan untuk user tersebut ke Backend (`factory-portal-service`) menggunakan User Key.
      - Tampilkan list proyek berpenomoran (misalnya nomor 1 s.d. 10) beserta instruksi pemilihan.
-  4. **Pilih Proyek Aktif (`/project-active-<nomor>` / Command Selector)**:
+  3. **Pilih Proyek Aktif (`/project-active-<nomor>` / Command Selector)**:
      - Buat handler pemilihan proyek (contoh: user mengetik `/project-active-1` atau menekan tombol proyek 1).
      - Set konteks `active_project_id` di cache/session state pengguna.
      - Kirim konfirmasi ke user bahwa proyek aktif telah berhasil diset dan siap untuk bertransaksi dengan AI Agent.
@@ -124,13 +150,12 @@ flowchart TD
   - *Kendala*: User mencoba menjalankan `/projects` atau `/project-active-<id>` sebelum melakukan autentikasi / belum memiliki User Key yang valid.
   - *Solusi*: Berikan middleware validation guard. Jika `User Key` belum ada di session cache, arahkan user secara otomatis untuk `/start` dan membagikan kontak terlebih dahulu.
 * **Definition of Done (DoD)**:
-  - Service Telegram Middleware aktif dan tersambung ke Telegram.
   - User yang terverifikasi berhasil mendapatkan User Key dari Backend (`factory-portal-service`).
   - Command `/projects` sukses menampilkan daftar proyek dari Backend, dan command `/project-active-<id>` berhasil menyetel proyek aktif pengguna.
 
 ---
 
-### Task 2: Integrasi Komunikasi ke Middleware Hermes (`factory-agent-adapter`), Pembuatan Sesi Upstream, & Handling Respon AI
+### Task 3: Integrasi Komunikasi ke Middleware Hermes (`factory-agent-adapter`), Pembuatan Sesi Upstream, & Handling Respon AI
 * **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi via upstream (`POST /channel/sessions`), serialisasi pengiriman pesan (`POST /channel/sessions/{id}/messages`), penanganan respon generate AI (SSE Stream / Polling), serta auto-save session berbasis UUID resmi dari Hermes/Adapter.
 * **Estimasi Durasi**: `2 - 3 Hari`
 * **Yang Harus Dikerjakan**:
@@ -167,7 +192,7 @@ flowchart TD
 
 ---
 
-### Task 3: Fitur Manajemen Riwayat Sesi (Get Session List & Resume Sesi Aktif)
+### Task 4: Fitur Manajemen Riwayat Sesi (Get Session List & Resume Sesi Aktif)
 * **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar sesi percakapan terdahulu pengguna dari `factory-agent-adapter` (`GET /channel/sessions/recent`), menampilkan daftar sesi berpenomoran via Telegram (command `/session`), dan mengaktifkan sesi yang dipilih pengguna (`/session-active-<nomor>`) agar percakapan dapat dilanjutkan dengan konteks memori sesi tersebut.
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
@@ -193,7 +218,7 @@ flowchart TD
 
 ---
 
-### Task 4: Manajemen & Akses Artefak Dokumen Proyek (`/artifact-list` & `/artifact-select-<nomor>`)
+### Task 5: Manajemen & Akses Artefak Dokumen Proyek (`/artifact-list` & `/artifact-select-<nomor>`)
 * **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar artefak/dokumen hasil generate AI Agent dari `factory-agent-adapter` (yang tersimpan di MinIO) berdasarkan proyek/sesi aktif pengguna, menampilkannya via command `/artifact-list`, serta menyediakan fitur pemilihan & pengunduhan dokumen via command `/artifact-select-<nomor>`.
 * **Estimasi Durasi**: `1 - 2 Hari`
 * **Yang Harus Dikerjakan**:
@@ -225,12 +250,13 @@ flowchart TD
 
 ```text
 +-------------------------------------------------------------------------------------------------------------------+
-| TOTAL ESTIMASI WAKTU: 5 - 9 Hari Kerja (~1.5 - 2 Minggu)                                                          |
+| TOTAL ESTIMASI WAKTU: 6 - 10 Hari Kerja (~1.5 - 2 Minggu)                                                         |
 +-------------------------------------------------------------------------------------------------------------------+
-| Hari 1 - 2 : Task 1 (Setup Telegram Middleware + Auth User Key via Backend + Load /projects & /project-active)   |
-| Hari 3 - 5 : Task 2 (Integrasi factory-agent-adapter + Inisiasi Sesi Upstream + Send Message & Stream Respon)     |
-| Hari 6 - 7 : Task 3 (Riwayat Sesi: /session List & /session-active Selection + Resume Context)                    |
-| Hari 8 - 9 : Task 4 (Artefak Dokumen: /artifact-list & /artifact-select + Presigned Download Link MinIO)          |
+| Hari 1     : Task 1 (Setup Akun BotFather + Token Secret + Setcommands + Koneksi Middleware Polling/Webhook)      |
+| Hari 2 - 3 : Task 2 (Auth Whitelist User Key via factory-portal-service + Load /projects & /project-active)       |
+| Hari 4 - 6 : Task 3 (Integrasi factory-agent-adapter + Inisiasi Sesi Upstream + Send Message & Stream Respon)     |
+| Hari 7 - 8 : Task 4 (Riwayat Sesi: /session List & /session-active Selection + Resume Context)                    |
+| Hari 9 - 10: Task 5 (Artefak Dokumen: /artifact-list & /artifact-select + Presigned Download Link MinIO)          |
 +-------------------------------------------------------------------------------------------------------------------+
 ```
 
