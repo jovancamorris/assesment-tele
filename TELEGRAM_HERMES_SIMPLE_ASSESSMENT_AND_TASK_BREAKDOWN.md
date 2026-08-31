@@ -105,9 +105,10 @@ flowchart TD
 * **Prerequisites (Syarat Sebelum Memulai)**:
   - Akun Telegram aktif (untuk mengakses `@BotFather`).
   - Runtime Python 3.11+ dan library `python-telegram-bot` (v21 Async).
-  - Nama resmi dan username bot yang disepakati (misal `@AIFactoryAssistantBot`).
+  - Nama resmi dan username bot yang disepakati (misal `@EksadBusinessAnalystBot` atau `@EksadSystemAnalystBot`).
+  - Konfigurasi peran agen (`AGENT_ROLE=BUSINESS_ANALYST` atau `SYSTEM_ANALYST`) pada environment variable middleware (**Prinsip: 1 Bot Telegram = Dedicated 1 Agent Role**).
   - Akses jaringan internet untuk menghubungi Telegram Bot API (`https://api.telegram.org`).
-* **Objective**: Mendaftarkan bot resmi di platform Telegram via `@BotFather`, mendapatkan Bot API Token, mendaftarkan menu perintah (commands) resmi, serta menetapkan arsitektur konektivitas (Long-Polling / Webhook) agar Telegram Middleware dapat menerima event dan pesan dari Telegram secara realtime.
+* **Objective**: Mendaftarkan bot resmi di platform Telegram via `@BotFather`, mendapatkan Bot API Token, mendaftarkan menu perintah (commands) navigasi lengkap, serta menetapkan arsitektur konektivitas (Long-Polling / Webhook) agar Telegram Middleware dapat menerima event dan pesan dari Telegram secara realtime.
 * **Estimasi Durasi**: `2 - 4 Jam`
 * **Yang Harus Dikerjakan**:
   1. **Registrasi Bot & Pengamanan Token**:
@@ -119,6 +120,8 @@ flowchart TD
        start - Mulai bot & verifikasi identitas (Share Contact)
        projects - Tampilkan daftar proyek yang dapat diakses
        session - Tampilkan riwayat sesi percakapan
+       newchat - Reset dan mulai sesi percakapan baru di proyek aktif
+       stop - Batalkan proses generate AI yang sedang berjalan
        artifact_list - Tampilkan daftar artefak dokumen proyek
        help - Panduan penggunaan dan format perintah
        ```
@@ -171,7 +174,7 @@ flowchart TD
   - Service `factory-agent-adapter` (port `:8090`) dan Hermes Gateway (`:8643`) sudah running dan berstatus healthy.
   - Tenant ID dan Project ID valid sudah terdaftar di sistem.
   - Library HTTP Async `httpx` terinstal di environment Telegram Middleware.
-* **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi via upstream (`POST /channel/sessions`), serialisasi pengiriman pesan (`POST /channel/sessions/{id}/messages`), penanganan respon generate AI (SSE Stream / Polling), serta auto-save session berbasis UUID resmi dari Hermes/Adapter.
+* **Objective**: Mengimplementasikan komunikasi dari Telegram Middleware ke `factory-agent-adapter` (Middleware Hermes) mengikuti standar kontrak API backend: inisiasi sesi upstream (`POST /channel/sessions`) dengan peran agen dedicated, serialisasi pengiriman pesan teks & attachment berkas (multipart), penanganan respon generate AI (SSE Stream / Polling), pembatalan proses (`/stop`), reset percakapan (`/newchat`), dan auto-save session berbasis UUID resmi dari Hermes/Adapter.
 * **Estimasi Durasi**: `2 - 3 Hari`
 * **Yang Harus Dikerjakan**:
   1. **Inisiasi Sesi Upstream (`POST /channel/sessions`)**:
@@ -179,31 +182,35 @@ flowchart TD
        ```json
        {
          "channel": "TELEGRAM",
-         "agentRole": "SYSTEM_ANALYST",
+         "agentRole": "BUSINESS_ANALYST", // Sesuai AGENT_ROLE dedicated bot
          "tenantId": "<tenant_uuid>",
          "projectId": "<active_project_uuid>"
        }
        ```
      - Menyertakan headers wajib: `Authorization: Bearer <User Key>`, `X-Device-Id: tg_<user_id>`, dan `Idempotency-Key: <uuid>`.
      - **Catatan Sesi**: `session_id` (UUID) di-generate langsung secara resmi oleh upstream (`factory-agent-adapter` / Hermes), sehingga bot cukup menyimpan UUID session yang dikembalikan untuk percakapan aktif.
-  2. **Serialisasi Pengiriman Pesan (`POST /channel/sessions/{id}/messages`)**:
-     - Mengubah pesan teks dari user Telegram menjadi request body (multipart/form) yang memuat field `message` dan `markdownMode`.
-     - Mengirim request ke `factory-agent-adapter` menggunakan `httpx` (Async Client) dengan menyertakan User Key & Device ID.
+  2. **Serialisasi Pengiriman Pesan & Dukungan Attachment Berkas (Multimodal)**:
+     - Mengubah pesan teks dari user Telegram menjadi request body (`multipart/form-data`) yang memuat field `message` dan `markdownMode`.
+     - **Dukungan Dokumen/Foto**: Jika user melampirkan berkas gambar/PDF/DOCX di chat Telegram, unduh buffer berkas dan sertakan ke part `files` pada request `POST /channel/sessions/{id}/messages`.
      - Mengirim status visual *typing action* (`send_chat_action("typing")`) ke Telegram agar pengguna mengetahui AI sedang memproses generate.
-  3. **Handling Respon AI & Chunking (SSE Stream / Polling)**:
+  3. **Handling Respon AI, Markdown Sanitizer, & Chunking**:
      - Menangkap `processId` dari respon awal `202 Accepted` dan mengonsumsi stream respon via SSE (`GET /channel/sessions/{id}/stream?processId=...`) atau polling riwayat pesan.
-     - Memformat output pesan ke Markdown Telegram secara rapi.
+     - **Markdown Sanitizer**: Men-sanitize karakter khusus agar kompatibel dengan Telegram MarkdownV2 / HTML formatter sehingga terhindar dari `400 Parse Error`.
      - Mengimplementasikan text chunking jika respon teks melebihi batas 4.096 karakter Telegram.
-  4. **Auto-Save Session & Riwayat Obrolan**:
+  4. **Fitur Reset Percakapan (`/newchat`) & Pembatalan (`/stop`)**:
+     - **Command `/newchat`**: Memanggil `POST /channel/sessions` baru untuk membuat session UUID bersih di proyek aktif yang sama.
+     - **Command `/stop`**: Memanggil `POST /channel/generations/{processId}/stop` ke `factory-agent-adapter` untuk menghentikan proses generate AI yang sedang berlangsung.
+  5. **Penanganan Token Expired (JWT Expiry Strategy)**:
+     - Jika request ke adapter menghasilkan `401 Unauthorized` karena token kedaluwarsa, middleware secara otomatis melakukan re-exchange ke Backend Portal atau memberikan notifikasi ramah bagi user untuk menyegarkan sesi.
+  6. **Auto-Save Session & Riwayat Obrolan**:
      - Riwayat pesan otomatis tersimpan di sisi adapter & Hermes berdasarkan session UUID aktif.
-     - Bot menyimpan mapping user $\leftrightarrow$ active `sessionId` di cache lokal/Redis agar percakapan berikutnya otomatis melanjutkan konteks sesi yang sama tanpa perlu inisiasi ulang.
 * **Potential Obstacle (Kendala)**:
-  - *Kendala*: Terjadi jeda koneksi saat mengonsumsi stream respon atau request timeout saat proses generate AI membutuhkan waktu cukup lama.
-  - *Solusi*: Gunakan streaming non-blocking dengan retry policy dan setting timeout HTTP Client yang memadai (60 - 120 detik).
+  - *Kendala*: Terjadi jeda koneksi saat mengonsumsi stream respon, parse error pada format teks markdown, atau ukuran file attachment melebihi batas (5MB/file).
+  - *Solusi*: Gunakan streaming non-blocking dengan retry policy, parser HTML/Markdown sanitizer, dan validasi ukuran file sebelum upload.
 * **Definition of Done (DoD)**:
-  - Sesi obrolan berhasil dibuka di `factory-agent-adapter` dan mengembalikan session UUID resmi dari upstream.
-  - Pesan user berhasil terkirim dan AI Agent merespon secara lancar ke antarmuka Telegram.
-  - Sesi obrolan tersimpan otomatis dan pengguna dapat melanjutkan percakapan berkonteks.
+  - Sesi obrolan berhasil dibuka di `factory-agent-adapter` sesuai role agen dedicated bot.
+  - Pesan teks dan file attachment user berhasil terkirim dan AI Agent merespon secara lancar ke antarmuka Telegram.
+  - Fitur `/newchat` dan `/stop` berfungsi sesuai standar backend, serta sesi obrolan tersimpan otomatis.
 
 ---
 
@@ -286,9 +293,11 @@ flowchart TD
 
 ## 📌 6. Ringkasan Singkat yang Perlu Diingat
 
-1. **Pemisahan Peran Layer**: Telegram Middleware berkomunikasi langsung ke `factory-agent-adapter` untuk transaksi chat AI, dan hanya menghubungi `factory-portal-service` (Backend Portal) untuk autentikasi whitelist & query list proyek.
-2. **Kredensial User Key & Device ID**: Setiap panggilan ke `factory-agent-adapter` wajib menyertakan `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>` untuk isolasi session guard.
-3. **Standar Komunikasi Setara ("Teacher & Students")**: Pola request dan payload dari Telegram Middleware ke `factory-agent-adapter` dibuat identik dengan cara kerja Backend Portal.
-4. **Session ID Resmi Upstream**: Sesi (UUID) di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes), bot hanya menyimpan dan mengikatkan session UUID tersebut ke pengguna.
-5. **Anti-Spoofing Nomor HP**: Verifikasi nomor HP wajib menggunakan tombol native Telegram `request_contact=True` untuk memastikan identitas nomor valid sesuai database whitelist karyawan.
-6. **Manajemen Artefak di MinIO**: Seluruh dokumen keluaran AI (BRD, FSD, Diagram, dll.) diakses melalui endpoint adapter yang terhubung ke MinIO dan dikirimkan ke chat Telegram sebagai file atau presigned URL.
+1. **1 Bot Telegram = Dedicated 1 Agent Role**: Setiap bot memiliki peran khusus (misal: Bot Business Analyst khusus `BUSINESS_ANALYST`, Bot System Analyst khusus `SYSTEM_ANALYST`) yang dikonfigurasikan via env middleware.
+2. **Pemisahan Peran Layer**: Telegram Middleware berkomunikasi langsung ke `factory-agent-adapter` untuk transaksi chat AI, dan hanya menghubungi `factory-portal-service` (Backend Portal) untuk autentikasi whitelist & query list proyek.
+3. **Kredensial User Key & Device ID**: Setiap panggilan ke `factory-agent-adapter` wajib menyertakan `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>` untuk isolasi session guard.
+4. **Standar Komunikasi Setara ("Teacher & Students")**: Pola request dan payload dari Telegram Middleware ke `factory-agent-adapter` dibuat identik dengan cara kerja Backend Portal (termasuk dukungan kirim file attachment `multipart/form-data`).
+5. **Session ID Resmi Upstream**: Sesi (UUID) di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes), bot hanya menyimpan dan mengikatkan session UUID tersebut ke pengguna.
+6. **Dukungan Reset & Pembatalan**: Tersedia command `/newchat` untuk membuka sesi baru di proyek yang sama dan command `/stop` untuk membatalkan proses generate yang sedang berlangsung.
+7. **Anti-Spoofing Nomor HP**: Verifikasi nomor HP wajib menggunakan tombol native Telegram `request_contact=True` untuk memastikan identitas nomor valid sesuai database whitelist karyawan.
+8. **Manajemen Artefak di MinIO**: Seluruh dokumen keluaran AI (BRD, FSD, Diagram, dll.) diakses melalui endpoint adapter yang terhubung ke MinIO dan dikirimkan ke chat Telegram sebagai file atau presigned URL.
