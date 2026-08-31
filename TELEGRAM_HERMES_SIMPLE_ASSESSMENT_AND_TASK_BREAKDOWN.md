@@ -167,6 +167,32 @@ flowchart TD
 
 ---
 
+### Task 3: Fitur Manajemen Riwayat Sesi (Get Session List & Resume Sesi Aktif)
+* **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar sesi percakapan terdahulu pengguna dari `factory-agent-adapter` (`GET /channel/sessions/recent`), menampilkan daftar sesi berpenomoran via Telegram (command `/session`), dan mengaktifkan sesi yang dipilih pengguna (`/session-active-<nomor>`) agar percakapan dapat dilanjutkan dengan konteks memori sesi tersebut.
+* **Estimasi Durasi**: `1 - 2 Hari`
+* **Yang Harus Dikerjakan**:
+  1. **Get Session List (`/session`)**:
+     - Buat command handler `/session`.
+     - Request daftar sesi percakapan ke `factory-agent-adapter` via `GET /channel/sessions/recent?page=1&size=10` dengan header `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>`.
+     - Tampilkan list sesi ke user Telegram dengan format nomor urut (contoh: 1 s.d. 10), nama proyek/title, role AI (SA/BA), preview pesan terakhir, dan timestamp.
+  2. **Pilih & Aktifkan Sesi (`/session-active-<nomor>` / Command Selector)**:
+     - Buat handler pemilihan sesi (contoh: user mengetik `/session-active-1` atau menekan tombol opsi sesi).
+     - Telegram Middleware memetakan nomor pilihan user ke `session_id` (UUID) yang sesuai dari list riwayat sesi.
+     - Perbarui state sesi aktif pengguna di cache lokal bot/Redis.
+     - Kirim notifikasi konfirmasi ke pengguna bahwa sesi tersebut telah aktif dan siap melanjutkan obrolan.
+  3. **Resume Obrolan Berkelanjutan**:
+     - Setelah sesi aktif diset, setiap pesan obrolan berikutnya otomatis diteruskan ke session UUID tersebut via `POST /channel/sessions/{sessionId}/messages`.
+     - AI Agent Hermes otomatis melanjutkan alur konteks percakapan tanpa kehilangan memori diskusi sebelumnya.
+* **Potential Obstacle (Kendala)**:
+  - *Kendala*: User memilih nomor sesi di luar range list yang ditampilkan atau sesi telah dihapus di backend.
+  - *Solusi*: Berikan validasi range nomor input (misal validasi 1 s.d. total list) dan fallback message yang ramah jika sesi tidak ditemukan.
+* **Definition of Done (DoD)**:
+  - Command `/session` sukses menampilkan daftar riwayat sesi pengguna dari `factory-agent-adapter`.
+  - Command `/session-active-<nomor>` berhasil mengganti sesi aktif di Telegram bot.
+  - Percakapan chat berikutnya berhasil melanjutkan konteks riwayat sesi yang dipilih.
+
+---
+
 ## ⏱️ 5. Estimasi Total Durasi & Urutan Pengerjaan
 
 *(Akan disesuaikan seiring penambahan task berikutnya)*
