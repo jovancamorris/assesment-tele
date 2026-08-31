@@ -223,15 +223,24 @@ flowchart TD
 
 ## ⏱️ 5. Estimasi Total Durasi & Urutan Pengerjaan
 
-*(Akan disesuaikan seiring penambahan task berikutnya)*
+```text
++-------------------------------------------------------------------------------------------------------------------+
+| TOTAL ESTIMASI WAKTU: 5 - 9 Hari Kerja (~1.5 - 2 Minggu)                                                          |
++-------------------------------------------------------------------------------------------------------------------+
+| Hari 1 - 2 : Task 1 (Setup Telegram Middleware + Auth User Key via Backend + Load /projects & /project-active)   |
+| Hari 3 - 5 : Task 2 (Integrasi factory-agent-adapter + Inisiasi Sesi Upstream + Send Message & Stream Respon)     |
+| Hari 6 - 7 : Task 3 (Riwayat Sesi: /session List & /session-active Selection + Resume Context)                    |
+| Hari 8 - 9 : Task 4 (Artefak Dokumen: /artifact-list & /artifact-select + Presigned Download Link MinIO)          |
++-------------------------------------------------------------------------------------------------------------------+
+```
 
 ---
 
 ## 📌 6. Ringkasan Singkat yang Perlu Diingat
 
-1. **Jangan biarkan Hermes CLI memegang Bot Telegram langsung** $\rightarrow$ Pisahkan ke layer middleware/portal.
-2. **Autentikasi ke Backend terlebih dahulu** $\rightarrow$ Dapatkan `User Key` sebelum mengizinkan transaksi chat ke `factory-agent-adapter` (Middleware Hermes).
-3. **Session ID dibuat oleh Upstream** $\rightarrow$ `factory-agent-adapter` / Hermes yang meng-generate UUID sesi, bot cukup menyimpan dan menggunakannya.
-4. **Gunakan `request_contact=True`** $\rightarrow$ Anti-spoofing nomor HP.
-5. **Gunakan `X-Device-Id: tg_<id>`** $\rightarrow$ User bisa buka Web Portal dan Telegram bersamaan tanpa saling *kick*.
-6. **Simpan hasil keluaran & artefak di MinIO** $\rightarrow$ Tersentralisasi dan dapat diakses baik oleh Web Portal maupun bot.
+1. **Pemisahan Peran Layer**: Telegram Middleware berkomunikasi langsung ke `factory-agent-adapter` untuk transaksi chat AI, dan hanya menghubungi `factory-portal-service` (Backend Portal) untuk autentikasi whitelist & query list proyek.
+2. **Kredensial User Key & Device ID**: Setiap panggilan ke `factory-agent-adapter` wajib menyertakan `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>` untuk isolasi session guard.
+3. **Standar Komunikasi Setara ("Teacher & Students")**: Pola request dan payload dari Telegram Middleware ke `factory-agent-adapter` dibuat identik dengan cara kerja Backend Portal.
+4. **Session ID Resmi Upstream**: Sesi (UUID) di-generate langsung oleh upstream (`factory-agent-adapter` / Hermes), bot hanya menyimpan dan mengikatkan session UUID tersebut ke pengguna.
+5. **Anti-Spoofing Nomor HP**: Verifikasi nomor HP wajib menggunakan tombol native Telegram `request_contact=True` untuk memastikan identitas nomor valid sesuai database whitelist karyawan.
+6. **Manajemen Artefak di MinIO**: Seluruh dokumen keluaran AI (BRD, FSD, Diagram, dll.) diakses melalui endpoint adapter yang terhubung ke MinIO dan dikirimkan ke chat Telegram sebagai file atau presigned URL.
