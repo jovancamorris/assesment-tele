@@ -26,19 +26,19 @@ Repository ini berisi dokumentasi analisis teknis, perancangan arsitektur, dan p
 flowchart TD
     subgraph TelegramBox["📱 Telegram"]
         TeleBot["Tele Bot App"]
-        TeleMW["Middleware"]
+        TeleMW["Telegram Middleware"]
         TeleBot <--> TeleMW
     end
 
     subgraph WebPortalBox["🌐 Web Portal"]
-        WebFE["Frontend"]
-        WebBE["Backend"]
+        WebFE["Frontend<br/>(factory-portal-web)"]
+        WebBE["Backend<br/>(factory-portal-service)"]
         WebFE <--> WebBE
     end
 
     subgraph HermesGatewayBox["🚪 Hermes Gateway Layer"]
-        HMW["Middleware Hermes"]
-        HGW["Hermes Gateway"]
+        HMW["Middleware Hermes<br/>(factory-agent-adapter)"]
+        HGW["Hermes Gateway<br/>(:8643 REST API)"]
         HMW <--> HGW
     end
 
@@ -51,9 +51,9 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <--> WebBE
-    TeleMW --> HMW
-    WebBE <--> HMW
+    TeleMW <-->|Auth & Whitelist| WebBE
+    TeleMW -->|Forward Chat & Session Scope| HMW
+    WebBE <-->|Trusted Context & Runs| HMW
     HGW <--> HermesCore
     HermesCore <--> MinIO
     WebBE -.-> MinIO

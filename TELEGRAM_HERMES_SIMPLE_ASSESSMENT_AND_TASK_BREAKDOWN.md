@@ -25,19 +25,19 @@ Berdasarkan blueprint arsitektur yang dirancang:
 flowchart TD
     subgraph TelegramBox["📱 Telegram"]
         TeleBot["Tele Bot App"]
-        TeleMW["Middleware"]
+        TeleMW["Telegram Middleware"]
         TeleBot <--> TeleMW
     end
 
     subgraph WebPortalBox["🌐 Web Portal"]
-        WebFE["Frontend"]
-        WebBE["Backend"]
+        WebFE["Frontend<br/>(factory-portal-web)"]
+        WebBE["Backend<br/>(factory-portal-service)"]
         WebFE <--> WebBE
     end
 
     subgraph HermesGatewayBox["🚪 Hermes Gateway Layer"]
-        HMW["Middleware Hermes"]
-        HGW["Hermes Gateway"]
+        HMW["Middleware Hermes<br/>(factory-agent-adapter)"]
+        HGW["Hermes Gateway<br/>(:8643 REST API)"]
         HMW <--> HGW
     end
 
@@ -50,9 +50,9 @@ flowchart TD
     end
 
     %% Alur Komunikasi
-    TeleMW <--> WebBE
-    TeleMW --> HMW
-    WebBE <--> HMW
+    TeleMW <-->|Auth & Whitelist| WebBE
+    TeleMW -->|Forward Chat & Session Scope| HMW
+    WebBE <-->|Trusted Context & Runs| HMW
     HGW <--> HermesCore
     HermesCore <--> MinIO
     WebBE -.-> MinIO
@@ -62,14 +62,14 @@ flowchart TD
 
 1. **Telegram Layer (`Tele Bot App` & `Middleware`)**:
    - **`Tele Bot App`**: Menangani interaksi pengguna di Telegram (command `/start`, `/newchat`, `/projects`, inline buttons, dan tombol native *Share Contact*).
-   - **`Middleware`**: Menjembatani bot dengan backend, memvalidasi otentikasi user, serta mem-forward request chat ke *Middleware Hermes* dengan membawa metadata sesi yang aman.
+   - **`Middleware`**: Menjembatani bot dengan backend, memvalidasi otentikasi user, serta mem-forward request chat ke `factory-agent-adapter` dengan membawa metadata sesi yang aman.
 
-2. **Web Portal (`Frontend` & `Backend`)**:
-   - **`Frontend`**: UI Web Portal untuk manajemen proyek, user, dan pemantauan AI.
-   - **`Backend`**: Core API (`factory-portal-service` & `svc-user-management`) untuk validasi whitelist, RBAC proyek, manajemen token/JWT, dan penyedia context ke Hermes.
+2. **Web Portal (`factory-portal-web` [FE] & `factory-portal-service` [BE])**:
+   - **`Frontend (factory-portal-web)`**: UI Web Portal untuk manajemen proyek, user, dan pemantauan AI.
+   - **`Backend (factory-portal-service)`**: Core API & User Management untuk validasi whitelist, RBAC proyek, manajemen token/JWT, dan penyedia context ke Hermes.
 
-3. **Hermes Gateway Layer (`Middleware Hermes` & `Hermes Gateway`)**:
-   - **`Middleware Hermes`**: Lapisan perantara untuk memvalidasi otorisasi request (dari Portal / Telegram), mengelola isolasi *session scope*, dan meneruskan payload ke API Gateway.
+3. **Hermes Gateway Layer (`factory-agent-adapter` & `Hermes Gateway`)**:
+   - **`Middleware Hermes (factory-agent-adapter)`**: Lapisan perantara / adapter untuk memvalidasi otorisasi request (dari Portal / Telegram), mengelola isolasi *session scope*, dan meneruskan payload ke API Gateway.
    - **`Hermes Gateway`**: REST API Gateway resmi yang mengekspos endpoint pemanggilan LLM/Agent (`POST /v1/runs`, `/sessions`, health checks).
 
 4. **Hermes (Core Engine)**:
