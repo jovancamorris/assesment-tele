@@ -193,6 +193,34 @@ flowchart TD
 
 ---
 
+### Task 4: Manajemen & Akses Artefak Dokumen Proyek (`/artifact-list` & `/artifact-select-<nomor>`)
+* **Objective**: Mengimplementasikan kemampuan Telegram Middleware untuk mengambil daftar artefak/dokumen hasil generate AI Agent dari `factory-agent-adapter` (yang tersimpan di MinIO) berdasarkan proyek/sesi aktif pengguna, menampilkannya via command `/artifact-list`, serta menyediakan fitur pemilihan & pengunduhan dokumen via command `/artifact-select-<nomor>`.
+* **Estimasi Durasi**: `1 - 2 Hari`
+* **Yang Harus Dikerjakan**:
+  1. **Get Artifact List Berdasarkan Proyek (`/artifact-list`)**:
+     - Buat command handler `/artifact-list`.
+     - Request daftar artefak ke `factory-agent-adapter` via `GET /channel/artifacts?sessionId={sessionId}` atau `GET /channel/sessions/{sessionId}/published-artifacts` dengan header `Authorization: Bearer <User Key>` dan `X-Device-Id: tg_<user_id>`.
+     - Filter dan tampilkan daftar artefak yang terkait dengan `active_project_id` / sesi aktif pengguna.
+     - Tampilkan list berpenomoran (misal: 1 s.d. 10) memuat: Nama File Dokumen (BRD, FSD, Diagram, dll.), format file (`.docx`, `.pdf`, `.md`), ukuran file, dan tanggal generate.
+  2. **Pilih & Generate Download Link (`/artifact-select-<nomor>` / Command Selector)**:
+     - Buat handler pemilihan artefak (contoh: user mengetik `/artifact-select-1` atau menekan tombol nomor artefak).
+     - Telegram Middleware mengambil `artifactId` yang sesuai dari daftar artefak proyek.
+     - Panggil endpoint `POST /channel/sessions/{sessionId}/published-artifacts/{artifactId}/download-url` atau `POST /channel/artifacts/{id}/download-url` untuk mendapatkan Presigned Download URL MinIO.
+  3. **Pengiriman Dokumen / Tautan Unduh ke Chat Telegram**:
+     - Mengirimkan link unduhan MinIO bertempo (TTL presigned URL) atau langsung mengunduh buffer berkas dan mengirimkannya sebagai file attachment native Telegram (`send_document`).
+     - Memberikan keterangan ringkas mengenai isi dokumen artefak yang diunduh.
+  4. **Validasi Scoping & Fallback**:
+     - Memastikan user hanya dapat mengakses artefak milik proyek yang diizinkan (berdasarkan User Key & Project ID aktif).
+     - Jika belum ada artefak yang ter-generate pada proyek tersebut, berikan pesan panduan untuk memulai interaksi AI terlebih dahulu.
+* **Potential Obstacle (Kendala)**:
+  - *Kendala*: File dokumen berukuran besar atau URL presigned MinIO kedaluwarsa sebelum user sempat mengunduh.
+  - *Solusi*: Berikan batas TTL presigned URL yang cukup (misal 5 menit / 300 detik) atau gunakan direct document stream via Telegram API untuk file dokumen standar.
+* **Definition of Done (DoD)**:
+  - Command `/artifact-list` sukses menampilkan daftar artefak yang sesuai dengan proyek aktif pengguna.
+  - Command `/artifact-select-<nomor>` berhasil mengirimkan file dokumen artefak atau tautan unduh MinIO yang valid ke pengguna Telegram.
+
+---
+
 ## ⏱️ 5. Estimasi Total Durasi & Urutan Pengerjaan
 
 *(Akan disesuaikan seiring penambahan task berikutnya)*
